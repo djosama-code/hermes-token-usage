@@ -1,0 +1,8 @@
+{
+  "name": "hermes-usage",
+  "label": "Token 用量",
+  "description": "Persistent token-usage backend: reads Hermes' own state.db (sessions + session_model_usage) and serves dsh-token-usage-style aggregations to the desktop /usage dashboard. Backend only — no web-dashboard tab.",
+  "icon": "GraphLine",
+  "version": "0.1.0",
+  "api": "plugin_api.py"
+}
