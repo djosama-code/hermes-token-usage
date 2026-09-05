@@ -73,6 +73,43 @@ async def health():
     return {"ok": True, "db": str(_resolve_db_path())}
 
 
+@router.get("/session_models")
+async def session_models(session_id: str = ""):
+    """Per-model usage breakdown for one session (session_id = durable session id)."""
+    if not session_id:
+        return {"ok": False, "error": "missing session_id query param"}
+    db = _resolve_db_path()
+    if not db.exists():
+        return {"ok": False, "error": f"state.db not found at {db}"}
+    conn = _connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                "select billing_provider as provider, model, "
+                "sum(api_call_count) as calls, "
+                "sum(input_tokens) as input, sum(output_tokens) as output, "
+                "sum(cache_read_tokens) as cache_read, sum(cache_write_tokens) as cache_write, "
+                "sum(reasoning_tokens) as reasoning, "
+                "round(sum(coalesce(estimated_cost_usd, actual_cost_usd, 0)), 6) as est_usd "
+                "from session_model_usage where session_id = ? "
+                "group by billing_provider, model "
+                "order by (sum(input_tokens)+sum(output_tokens)+sum(cache_read_tokens)+sum(cache_write_tokens)) desc",
+                (session_id,),
+            ).fetchall()
+        ]
+        for row in rows:
+            t = (row.get("input") or 0) + (row.get("output") or 0)
+            cr = row.get("cache_read") or 0
+            row["total"] = t + cr + (row.get("cache_write") or 0)
+            if row.get("est_usd") is not None:
+                row["est_usd"] = round(row["est_usd"], 6)
+        return {"ok": True, "session_id": session_id, "models": rows}
+    finally:
+        conn.close()
+
+
 @router.get("/overview")
 async def overview():
     db = _resolve_db_path()

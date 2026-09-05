@@ -41,42 +41,96 @@ function fmtDate(sec) {
 }
 
 /* ---------- live bottom bar (the always-visible meter) ---------- */
-function MeterChip({ label, value, title }) {
+function MeterChip({ label, value, title, strong }) {
   return jsxs('span', {
     className: 'inline-flex items-baseline gap-1 whitespace-nowrap',
     title: title,
     children: [
       jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: label }),
-      jsx('span', { className: 'text-[0.6875rem] font-medium tabular-nums text-(--ui-text-secondary)', children: value })
+      jsx('span', {
+        className: strong
+          ? 'text-[0.8125rem] font-semibold tabular-nums text-(--ui-accent)'
+          : 'text-[0.6875rem] font-medium tabular-nums text-(--ui-text-secondary)',
+        children: value
+      })
     ]
   })
 }
 
-function BottomBar() {
-  const u = useValue(host.state.focusedUsage)
-  const open = () => { haptic('tap'); host.navigate('/usage') }
-  const chip = 'inline-flex h-full items-center gap-1 px-1.5 text-[0.6875rem] transition-colors hover:bg-(--chrome-action-hover) hover:text-foreground'
+function modelShort(name) {
+  if (!name) return '—'
+  const s = String(name)
+  const i = s.lastIndexOf('/')
+  return i >= 0 ? s.slice(i + 1) : s
+}
 
-  return jsx('button', {
+function BottomBar({ loadModels }) {
+  const u = useValue(host.state.focusedUsage)
+  const model = useValue(host.state.model)
+  const storedId = useValue(host.state.focusedStoredSessionId)
+  const [models, setModels] = useState(null)
+  const open = () => { haptic('tap'); host.navigate('/usage') }
+
+  useEffect(() => {
+    let alive = true
+    if (!storedId || !loadModels) { setModels(null); return () => { alive = false } }
+    const run = () => {
+      loadModels(storedId).then(res => {
+        if (!alive) return
+        setModels(res && res.ok && Array.isArray(res.models) ? res.models : null)
+      }).catch(() => { if (alive) setModels(null) })
+    }
+    run()
+    const id = setInterval(run, REFRESH_MS)
+    return () => { alive = false; clearInterval(id) }
+  }, [storedId, loadModels])
+
+  const multi = models && models.length > 1
+
+  return jsxs('button', {
     type: 'button',
     onClick: open,
     title: '点击打开 Token 用量详情页',
-    className: 'flex h-full w-full items-center gap-3 overflow-hidden px-2 text-left text-(--ui-text-secondary) hover:text-foreground',
-    children: !u
-      ? jsx('span', { className: chip, children: 'Token 用量 — 暂无活动会话' })
-      : jsxs('span', { className: 'flex items-center gap-3',
-          children: [
-            jsx('span', { className: 'inline-flex items-center gap-1 font-medium text-(--ui-accent)', children: 'Token' }),
-            jsx(MeterChip, { label: '输入', value: fmt(u.input), title: '输入 token' }),
-            jsx(MeterChip, { label: '输出', value: fmt(u.output), title: '输出 token' }),
-            u.cache_hit_pct != null
-              ? jsx(MeterChip, { label: '缓存命中', value: u.cache_hit_pct + '%', title: '当前会话提示词缓存命中率' })
-              : jsx(MeterChip, { label: '缓存', value: '—', title: 'provider 未上报缓存' }),
-            jsx(MeterChip, { label: '总', value: fmt(u.total), title: '总 token（含缓存）' }),
-            jsx(MeterChip, { label: '调用', value: u.calls ?? 0, title: 'API 调用次数' }),
-            u.cost_usd != null ? jsx(MeterChip, { label: '费用', value: fmtUsd(u.cost_usd), title: '估算费用 USD' }) : null
-          ]
-        })
+    className: 'flex h-full w-full flex-col justify-center gap-0.5 overflow-hidden px-2 text-left text-(--ui-text-secondary) hover:text-foreground',
+    children: [
+      !u && !model
+        ? jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-tertiary)', children: 'Token 用量 — 暂无活动会话' })
+        : jsxs('div', {
+            className: 'flex items-center gap-3 overflow-hidden',
+            children: [
+              jsx('span', {
+                className: 'inline-flex max-w-[210px] items-center gap-1 truncate whitespace-nowrap text-[0.6875rem] font-semibold text-(--ui-accent)',
+                title: '当前模型: ' + (model || '—'),
+                children: model ? '模型 ' + modelShort(model) : '模型 —'
+              }),
+              u ? jsx(MeterChip, { label: '输入', value: fmt(u.input), title: '输入 token' }) : null,
+              u ? jsx(MeterChip, { label: '输出', value: fmt(u.output), title: '输出 token' }) : null,
+              u && u.cache_hit_pct != null
+                ? jsx(MeterChip, { label: '缓存命中', value: u.cache_hit_pct + '%', title: '当前会话提示词缓存命中率' })
+                : null,
+              u ? jsx(MeterChip, { label: '总', value: fmt(u.total), title: '总 token（含缓存）', strong: true }) : null,
+              u ? jsx(MeterChip, { label: '调用', value: u.calls ?? 0, title: 'API 调用次数' }) : null,
+              u && u.cost_usd != null ? jsx(MeterChip, { label: '费用', value: fmtUsd(u.cost_usd), title: '估算费用 USD' }) : null,
+              multi ? jsx('span', { className: 'whitespace-nowrap text-[0.6875rem] text-(--ui-text-tertiary)', children: '· ' + models.length + ' 个模型' }) : null
+            ]
+          }),
+      multi
+        ? jsxs('div', {
+            className: 'flex items-center gap-2 overflow-hidden',
+            children: [
+              jsx('span', { className: 'whitespace-nowrap text-[0.6875rem] text-(--ui-text-quaternary)', children: '本会话按模型:' }),
+              models.map(mm => jsxs('span', {
+                className: 'inline-flex items-center gap-1 whitespace-nowrap rounded bg-(--ui-bg-elevated) px-1.5 py-px text-[0.6875rem]',
+                title: (mm.provider ? mm.provider + ' · ' : '') + (mm.model || '') + ' · 总 ' + (mm.total != null ? mm.total.toLocaleString() : '') + ' · ' + (mm.calls || 0) + ' 次调用',
+                children: [
+                  jsx('span', { className: 'text-(--ui-text-secondary)', children: modelShort(mm.model) }),
+                  jsx('span', { className: 'font-medium tabular-nums text-(--ui-text-tertiary)', children: fmt(mm.total) })
+                ]
+              }, (mm.model || '') + '·' + String(mm.calls)))
+            ]
+          })
+        : null
+    ]
   })
 }
 
@@ -287,14 +341,15 @@ export default {
   name: 'Token 用量',
   register(ctx) {
     const load = () => ctx.rest('/overview')
+    const loadModels = sid => ctx.rest('/session_models?session_id=' + encodeURIComponent(String(sid || '')))
 
     // Always-visible bottom meter (auto-docked below the workspace pane).
     ctx.register({
       id: 'pane',
       area: PANES_AREA,
       title: 'Token 用量',
-      data: { placement: 'bottom', dock: { pane: 'workspace', pos: 'bottom' }, height: '40px' },
-      render: () => jsx(BottomBar, {})
+      data: { placement: 'bottom', dock: { pane: 'workspace', pos: 'bottom' }, height: '56px' },
+      render: () => jsx(BottomBar, { loadModels })
     })
 
     // Detail page (clicking the bar opens it).
