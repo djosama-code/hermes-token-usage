@@ -630,6 +630,74 @@ def enable_backend(home):
         print("  !! 写回 config.yaml 失败 (%s)" % ex)
         print("     手动启用: hermes config set plugins.enabled \"['hermes-usage']\"")
 
+def _read_serve_port(home):
+    """Find the port of the desktop backend. Hermes service (serve) logs
+    `HERMES_BACKEND_READY port=N` into <home>/logs/desktop.log on boot."""
+    log = home / "logs" / "desktop.log"
+    if not log.exists():
+        return None
+    try:
+        txt = log.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return None
+    import re as _re
+    ports = _re.findall(r"HERMES_BACKEND_READY port=(\d+)", txt)
+    return ports[-1] if ports else None
+
+
+def verify_backend(home):
+    """Best-effort online check: is /api/plugins/hermes-usage/ live yet?
+
+    Hermes mounts a plugin's API route only at serve-startup AND only if the
+    plugin was in plugins.enabled at that moment. If a desktop app was already
+    running when this plugin was enabled, the route is missing until the app is
+    FULLY restarted (tray quit -> reopen). This probe tells the user which case
+    they are in. Never raises; prints for humans.
+    """
+    try:
+        import json  # noqa: F401
+        import re as _re
+        import urllib.error
+        import urllib.request
+    except Exception:
+        return
+    port = _read_serve_port(home)
+    if not port:
+        print("  ? 无法读取桌面后端端口(desktop.log), 跳过在线自检")
+        return
+    base = "http://127.0.0.1:%s" % port
+    try:
+        with urllib.request.urlopen(base + "/", timeout=5) as r:
+            html = r.read().decode("utf-8", "ignore")
+    except Exception as ex:
+        print("  ? 无法连接桌面后端 (%s:%s): %s" % (base, "", ex))
+        return
+    m = _re.search(r'__HERMES_SESSION_TOKEN__="([^"]+)"', html)
+    token = m.group(1) if m else ""
+    if not token:
+        print("  ? 未取得会话 token, 跳过在线自检")
+        return
+    url = base + "/api/plugins/hermes-usage/overview"
+    req = urllib.request.Request(url, headers={"X-Hermes-Session-Token": token})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
+            print("  ✓ 后端已挂载: %s -> HTTP %s (历史详情页可用)" % (url, r.status))
+            return
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")[:140]
+        if e.code == 401:
+            print("  ✓ 路由已就绪(401=鉴权通过后可用); 若 /usage 仍报错说明页面刚需刷新")
+            print("    请在桌面端 Ctrl+K -> Reload desktop plugins 或重开应用后刷新 /usage")
+        elif e.code == 404:
+            print("  ✗ /usage 后端尚未挂载 (404)。原因: 桌面端 serve 是在启用插件前启动的。")
+            print("    请【彻底退出桌面端(含托盘图标)】再重新打开, 然后刷新 /usage 页即可。")
+            print("    (注意: 仅重启消息网关/hermes gateway 不解决此问题。)")
+        else:
+            print("  ? HTTP %s: %s (请退出并重开桌面端后刷新 /usage)" % (e.code, body))
+    except Exception as ex:
+        print("  ? 自检请求失败: %s" % ex)
+
+
 def main():
     bar_only = "--bar-only" in sys.argv
     if "-h" in sys.argv or "--help" in sys.argv:
@@ -645,8 +713,18 @@ def main():
     if not bar_only:
         enable_backend(home)
     print()
-    print("完成。请彻底退出 Hermes 桌面端(含托盘)后重开。")
-    print("若底部用量条未出现: Ctrl+K -> Reload desktop plugins")
+    print("下一步（重要）。请完成以下操作，否则 /usage 历史详情页会一直报 404:")
+    print("  1) 【彻底退出 Hermes 桌面端, 包括托盘图标】——从托盘右键选『退出/Quit』,")
+    print("     而不是只关窗口。")
+    print("  2) 重新打开桌面端。")
+    print("  3) 打开 /usage 页(点底部用量条), 或按 Ctrl+K 输入 'Reload desktop plugins' 回车。")
+    print()
+    print("为什么必须这么做: Hermes 只在服务启动那一刻挂载插件后端路由, 且要求该插件已在")
+    print("plugins.enabled 白名单里。若桌面端在启用插件前就已经在运行, 它不会重新挂载,")
+    print("""除非把桌面端连同其后端(serve)整个重启。仅重启消息网关(hermes gateway)不解决此问题。""")
+    print()
+    print("正在尝试自检后端是否已挂载(需桌面端已运行)…")
+    verify_backend(home)
     return 0
 
 if __name__ == "__main__":

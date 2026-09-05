@@ -54,6 +54,26 @@ plugin/
     └── plugin_api.py                                # 读 state.db 的聚合后端
 ```
 
+---
+
+## 常见问题：装完 `/usage` 一直报「无法读取用量后端 / 404」
+
+**原因（这是 Hermes 的机制，不是插件 bug）：** Hermes 只在**后端服务启动那一瞬间**挂载
+插件的后端路由（`_mount_plugin_api_routes`，见 `web_server_dashboard.py`），并且**要求该插件
+在启动那一刻已经在 `plugins.enabled` 白名单里**。如果桌面端在启用插件**之前**就在运行，
+它不会重新挂载——必须把**桌面端连同其后端（serve）整体重新启动**才会重新挂载。
+
+**正确顺序（三个都做）：**
+1. 运行本安装器（写入文件 + 把 `hermes-usage` 写进 `plugins.enabled`）。
+2. **彻底退出 Hermes 桌面端，包括托盘图标**（托盘右键 → 退出/Quit），只关窗口不够。
+3. 重新打开桌面端 → 点底部用量条打开 `/usage`，或 `Ctrl+K` → `Reload desktop plugins`。
+
+**注意：** 仅 `hermes gateway restart`（消息网关）**不能**解决此问题——消息网关和桌面端
+serve 是两码事。装完本安装器会自动做一次在线自检（去 `desktop.log` 找端口、取会话 token、
+探测 `/api/plugins/hermes-usage/overview`），直接告诉你后端是否已挂载。
+
+---
+
 ## 数据口径说明
 - 底部条命中率/费用来自 Hermes 后端实时 `UsageStats`，是**精确值**。
 - 详情页 "缓存 ÷ 输入" 是**读取放大倍数**（Hermes 累计口径），**不是命中率**，已标注避免误解。
