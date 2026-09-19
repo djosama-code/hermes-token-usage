@@ -69,7 +69,37 @@ function BottomBar({ loadModels }) {
   const model = useValue(host.state.model)
   const storedId = useValue(host.state.focusedStoredSessionId)
   const [models, setModels] = useState(null)
+  const [live, setLive] = useState(null)
   const open = () => { haptic('tap'); host.navigate('/usage') }
+
+  // Live output rate: subscribe to streamed text deltas and derive tok/s over a
+  // ~2s sliding window (approximate — derived from characters, not billing).
+  useEffect(() => {
+    const win = []
+    const K = 3.5
+    let lastEvent = 0
+    const push = chars => { const now = Date.now(); win.push([now, chars]); lastEvent = now }
+    const onEv = ev => {
+      if (!ev || !ev.type) return
+      const t = ev.type
+      if (t !== 'message.delta' && t !== 'reasoning.delta' && t !== 'thinking.delta') return
+      const fId = host.state.focusedSessionId.get()
+      if (ev.session_id && fId && ev.session_id !== fId) return
+      const text = ev.payload && typeof ev.payload.text === 'string' ? ev.payload.text : ''
+      if (text) push(text.length)
+    }
+    let dispose = null
+    try { dispose = host.onEvent('*', onEv) } catch (e) { dispose = null }
+    const id = setInterval(() => {
+      const now = Date.now()
+      while (win.length && now - win[0][0] > 2000) win.shift()
+      const chars = win.reduce((a, x) => a + x[1], 0)
+      const span = win.length ? Math.max((now - win[0][0]) / 1000, 0.5) : 0
+      const streaming = win.length > 0 && (now - lastEvent) < 1500
+      setLive(streaming ? { tps: (chars / span) / K } : null)
+    }, 500)
+    return () => { clearInterval(id); if (typeof dispose === 'function') dispose() }
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -103,6 +133,13 @@ function BottomBar({ loadModels }) {
                 title: '当前模型: ' + (model || '—'),
                 children: model ? '模型 ' + modelShort(model) : '模型 —'
               }),
+              live
+                ? jsx('span', {
+                    className: 'inline-flex items-center gap-1 whitespace-nowrap rounded bg-(--ui-bg-elevated) px-1.5 py-px text-[0.6875rem] font-semibold text-(--ui-accent)',
+                    title: '实时输出速率（按流式字符估算，非精确计费口径）',
+                    children: '生成中 ~' + Math.round(live.tps) + ' tok/s'
+                  })
+                : null,
               u ? jsx(MeterChip, { label: '输入', value: fmt(u.input), title: '输入 token' }) : null,
               u ? jsx(MeterChip, { label: '输出', value: fmt(u.output), title: '输出 token' }) : null,
               u && u.cache_hit_pct != null
