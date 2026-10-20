@@ -145,6 +145,21 @@ function BottomBar({ loadModels }) {
               u && u.cache_hit_pct != null
                 ? jsx(MeterChip, { label: '缓存命中', value: u.cache_hit_pct + '%', title: '当前会话提示词缓存命中率' })
                 : null,
+              u && u.context_max
+                ? jsxs('span', {
+                    className: 'inline-flex items-baseline gap-1 whitespace-nowrap',
+                    title: '上下文已用 ' + fmt(u.context_used || 0) + ' / ' + fmt(u.context_max) + (u.context_estimated ? '（估算）' : ''),
+                    children: [
+                      jsx('span', { className: 'text-[0.6875rem] text-(--ui-text-quaternary)', children: '上下文' }),
+                      jsx('span', {
+                        className: ((u.context_percent || 0) >= 80
+                          ? 'text-[0.75rem] font-semibold tabular-nums text-(--ui-accent)'
+                          : 'text-[0.6875rem] font-medium tabular-nums text-(--ui-text-secondary)'),
+                        children: Math.round(u.context_percent || 0) + '%'
+                      })
+                    ]
+                  })
+                : null,
               u ? jsx(MeterChip, { label: '总', value: fmt(u.total), title: '总 token（含缓存）', strong: true }) : null,
               u ? jsx(MeterChip, { label: '调用', value: u.calls ?? 0, title: 'API 调用次数' }) : null,
               u && u.cost_usd != null ? jsx(MeterChip, { label: '费用', value: fmtUsd(u.cost_usd), title: '估算费用 USD' }) : null,
