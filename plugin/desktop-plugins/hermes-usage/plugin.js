@@ -64,12 +64,13 @@ function modelShort(name) {
   return i >= 0 ? s.slice(i + 1) : s
 }
 
-function BottomBar({ loadModels }) {
+function BottomBar({ loadModels, loadBalance }) {
   const u = useValue(host.state.focusedUsage)
   const model = useValue(host.state.model)
   const storedId = useValue(host.state.focusedStoredSessionId)
   const [models, setModels] = useState(null)
   const [live, setLive] = useState(null)
+  const [bal, setBal] = useState(null)
   const open = () => { haptic('tap'); host.navigate('/usage') }
 
   // Live output rate: subscribe to streamed text deltas and derive tok/s over a
@@ -100,6 +101,19 @@ function BottomBar({ loadModels }) {
     }, 500)
     return () => { clearInterval(id); if (typeof dispose === 'function') dispose() }
   }, [])
+
+  // DeepSeek account balance — polled every 60s, silently hidden on failure.
+  useEffect(() => {
+    if (!loadBalance) return
+    let alive = true
+    const run = () => {
+      loadBalance().then(r => { if (alive) setBal(r && r.ok ? r : null) })
+        .catch(() => { if (alive) setBal(null) })
+    }
+    run()
+    const id = setInterval(run, 60000)
+    return () => { alive = false; clearInterval(id) }
+  }, [loadBalance])
 
   useEffect(() => {
     let alive = true
@@ -163,6 +177,13 @@ function BottomBar({ loadModels }) {
               u ? jsx(MeterChip, { label: '总', value: fmt(u.total), title: '总 token（含缓存）', strong: true }) : null,
               u ? jsx(MeterChip, { label: '调用', value: u.calls ?? 0, title: 'API 调用次数' }) : null,
               u && u.cost_usd != null ? jsx(MeterChip, { label: '费用', value: fmtUsd(u.cost_usd), title: '估算费用 USD' }) : null,
+              bal
+                ? jsx(MeterChip, {
+                    label: '余额',
+                    value: (bal.currency === 'CNY' ? '¥' : bal.currency === 'USD' ? '$' : '') + bal.total,
+                    title: 'DeepSeek 账户余额（' + (bal.currency || '未知') + '，60 秒缓存）' + (bal.is_available === false ? ' — 余额不足' : '')
+                  })
+                : null,
               multi ? jsx('span', { className: 'whitespace-nowrap text-[0.6875rem] text-(--ui-text-tertiary)', children: '· ' + models.length + ' 个模型' }) : null
             ]
           }),
@@ -394,6 +415,7 @@ export default {
   register(ctx) {
     const load = () => ctx.rest('/overview')
     const loadModels = sid => ctx.rest('/session_models?session_id=' + encodeURIComponent(String(sid || '')))
+    const loadBalance = () => ctx.rest('/balance')
 
     // Always-visible bottom meter (auto-docked below the workspace pane).
     ctx.register({
@@ -401,7 +423,7 @@ export default {
       area: PANES_AREA,
       title: 'Token 用量',
       data: { placement: 'bottom', dock: { pane: 'workspace', pos: 'bottom' }, height: '56px' },
-      render: () => jsx(BottomBar, { loadModels })
+      render: () => jsx(BottomBar, { loadModels, loadBalance })
     })
 
     // Detail page (clicking the bar opens it).
