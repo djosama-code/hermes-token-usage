@@ -13,9 +13,12 @@ Env override for testing only: set HERMES_USAGE_DB to a state.db path
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import sqlite3
 import time
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -71,6 +74,64 @@ def _now_utc_day() -> int:
 @router.get("/health")
 async def health():
     return {"ok": True, "db": str(_resolve_db_path())}
+
+
+# --- DeepSeek account balance (60s cache) --------------------------------
+_balance_cache = {"ts": 0.0, "data": None}
+
+
+def _deepseek_key() -> str:
+    key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
+    if key:
+        return key
+    try:
+        envp = _resolve_db_path().parent / ".env"
+        for line in envp.read_text(encoding="utf-8").splitlines():
+            if line.startswith("DEEPSEEK_API_KEY="):
+                return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _fetch_balance() -> dict:
+    key = _deepseek_key()
+    if not key:
+        return {"ok": False, "error": "DEEPSEEK_API_KEY not set"}
+    req = urllib.request.Request(
+        "https://api.deepseek.com/user/balance",
+        headers={"Authorization": "Bearer " + key, "Accept": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    infos = data.get("balance_infos") or []
+    pick = next((i for i in infos if i.get("currency") == "CNY"), infos[0] if infos else None)
+    return {
+        "ok": True,
+        "is_available": data.get("is_available"),
+        "currency": (pick or {}).get("currency"),
+        "total": (pick or {}).get("total_balance"),
+        "granted": (pick or {}).get("granted_balance"),
+        "topped_up": (pick or {}).get("topped_up_balance"),
+        "infos": infos,
+        "ts": time.time(),
+    }
+
+
+@router.get("/balance")
+async def balance():
+    now = time.time()
+    cached = _balance_cache["data"]
+    if cached and now - _balance_cache["ts"] < 60:
+        return cached
+    try:
+        out = await asyncio.to_thread(_fetch_balance)
+    except Exception as exc:  # network / auth failure must not break the bar
+        return {"ok": False, "error": str(exc)}
+    if out.get("ok"):
+        _balance_cache["ts"] = now
+        _balance_cache["data"] = out
+    return out
 
 
 @router.get("/session_models")
